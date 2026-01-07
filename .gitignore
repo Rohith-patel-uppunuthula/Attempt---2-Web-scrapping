@@ -1,0 +1,35 @@
+# Python
+*.py[cod]
+*$py.class
+*.so
+__pycache__/
+*.egg-info/
+dist/
+build/
+
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# Django
+*.log
+db.sqlite3
+db.sqlite3-journal
+media/
+staticfiles/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Excel downloads (optional - remove if you want to track files)
+excel_downloads/*.xls
+excel_downloads/*.xlsx
+!excel_downloads/.gitkeep
+
+# OS
+.DS_Store
+Thumbs.db
