@@ -3,12 +3,25 @@ import requests
 from django.conf import settings
 from .url_generator import URLGenerator
 from .logger_service import LoggerService
+from .excel_parser import ExcelParser
+from amfi_downloader.models import AmfiMonthlyData
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class DownloadService:
     """
     Core service for downloading Excel files with idempotency checks.
-    Handles the complete download workflow: check -> download -> log.
+    Now includes parsing and storing data in database.
+    
+    Workflow:
+    1. Generate URL for current month
+    2. Check if already downloaded (idempotency)
+    3. Download file if needed
+    4. Parse Excel file
+    5. Store parsed data in database
+    6. Log everything
     """
     
     def __init__(self):
@@ -19,13 +32,6 @@ class DownloadService:
     def execute_download(self):
         """
         Main execution method called by API endpoint.
-        
-        Workflow:
-        1. Generate URL for current month
-        2. Check if already downloaded (idempotency)
-        3. If not downloaded -> attempt download
-        4. If already downloaded -> skip
-        5. Log everything
         
         Returns:
             dict: Result summary with status and details
@@ -48,11 +54,22 @@ class DownloadService:
                 'url': url,
                 'month': month,
                 'year': year,
-                'skip_reason': skip_reason
+                'skip_reason': skip_reason,
+                'parsed_records': 0
             }
         
         # Step 3: Attempt download
         download_result = self._download_file(url, month, year)
+        
+        # Step 4: If download succeeded, parse and store
+        if download_result['status'] == 'success':
+            parse_result = self._parse_and_store(
+                download_result['file_path'],
+                month,
+                year
+            )
+            download_result['parsed_records'] = parse_result['records_stored']
+            download_result['parse_status'] = parse_result['status']
         
         return download_result
     
@@ -168,4 +185,54 @@ class DownloadService:
                 'month': month,
                 'year': year,
                 'error': error_msg
+            }
+    
+    def _parse_and_store(self, file_path, month, year):
+        """
+        Parse downloaded Excel file and store data in database.
+        
+        Args:
+            file_path (str): Path to downloaded Excel file
+            month (str): Month (e.g., 'jan')
+            year (int): Year (e.g., 2025)
+        
+        Returns:
+            dict: Parse result with status and count
+        """
+        try:
+            # Parse Excel file
+            parsed_data = ExcelParser.parse_excel(file_path, month, year)
+            
+            if not parsed_data:
+                logger.warning(f"No data parsed from {file_path}")
+                return {
+                    'status': 'parse_failed',
+                    'records_stored': 0,
+                    'message': 'No data extracted from Excel file'
+                }
+            
+            # Store in database
+            records_stored = 0
+            for record in parsed_data:
+                AmfiMonthlyData.objects.update_or_create(
+                    month=record['month'],
+                    scheme_category=record['scheme'],
+                    defaults={'net_inflow': record['net_inflow']}
+                )
+                records_stored += 1
+            
+            logger.info(f"Stored {records_stored} records in database")
+            
+            return {
+                'status': 'parse_success',
+                'records_stored': records_stored,
+                'message': f'Successfully parsed and stored {records_stored} records'
+            }
+        
+        except Exception as e:
+            logger.error(f"Error parsing/storing data: {str(e)}")
+            return {
+                'status': 'parse_error',
+                'records_stored': 0,
+                'message': f'Error: {str(e)}'
             }

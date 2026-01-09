@@ -1,5 +1,5 @@
 from django.contrib import admin
-from amfi_downloader.models import DownloadLog
+from amfi_downloader.models import DownloadLog, AmfiMonthlyData
 
 
 @admin.register(DownloadLog)
@@ -60,3 +60,33 @@ class DownloadLogAdmin(admin.ModelAdmin):
     def has_delete_permission(self, request, obj=None):
         """Disable log deletion via admin (audit trail)"""
         return False
+
+
+@admin.register(AmfiMonthlyData)
+class AmfiMonthlyDataAdmin(admin.ModelAdmin):
+    """
+    Admin interface for AmfiMonthlyData model.
+    View and manage parsed AMFI data.
+    """
+    
+    list_display = [
+        'id',
+        'month',
+        'scheme_category',
+        'net_inflow',
+        'created_at',
+    ]
+    
+    list_filter = [
+        'month',
+        'scheme_category',
+    ]
+    
+    search_fields = [
+        'month',
+        'scheme_category',
+    ]
+    
+    ordering = ['-created_at', 'month', 'scheme_category']
+    
+    readonly_fields = ['created_at', 'updated_at']
