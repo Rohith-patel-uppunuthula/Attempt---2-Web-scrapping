@@ -29,32 +29,24 @@ LARGE_MIDCAP_BUCKET = [
 
 
 # ======================================================
+# HELPER FUNCTION
+# ======================================================
+
+def get_year_suffix(year):
+    """
+    Convert 4-digit year to 2-digit suffix.
+    Example: 2025 -> '25', 2026 -> '26'
+    """
+    return str(year)[-2:]
+
+
+# ======================================================
 # API 1: Year Matrix (Category-wise Monthly Values)
 # ======================================================
 
 class YearMatrixView(APIView):
     """
     GET /api/amfi/year/<year>/
-    
-    Returns all schemes across all months in dashboard format.
-    
-    Example:
-        GET /api/amfi/year/2025/
-    
-    Response:
-        {
-            "year": 2025,
-            "months": ["01-May-25", "01-Jun-25", ...],
-            "categories": ["SMALL CAP FUND", "LARGE CAP FUND", ...],
-            "data": {
-                "01-May-25": {
-                    "SMALL CAP FUND": 3476.04,
-                    "LARGE CAP FUND": 971.97,
-                    ...
-                },
-                "01-Jun-25": { ... }
-            }
-        }
     """
     
     def get(self, request, year):
@@ -66,8 +58,11 @@ class YearMatrixView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
+        # Convert to 2-digit year suffix
+        year_suffix = get_year_suffix(year)
+        
         # Get all data for the year
-        qs = AmfiMonthlyData.objects.filter(month__contains=str(year))
+        qs = AmfiMonthlyData.objects.filter(month__contains=f'-{year_suffix}')
         
         if not qs.exists():
             return Response(
@@ -75,9 +70,11 @@ class YearMatrixView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
         
-        # Get unique months and categories
-        months = sorted(qs.values_list('month', flat=True).distinct())
-        categories = sorted(qs.values_list('scheme_category', flat=True).distinct())
+        # Get unique months (convert to set to remove duplicates)
+        months = sorted(list(set(qs.values_list('month', flat=True))))
+        
+        # Get unique categories (convert to set to remove duplicates)
+        categories = sorted(list(set(qs.values_list('scheme_category', flat=True))))
         
         # Build matrix: {month: {category: net_inflow}}
         data_matrix = {}
@@ -90,8 +87,8 @@ class YearMatrixView(APIView):
         
         response_data = {
             'year': year,
-            'months': list(months),
-            'categories': list(categories),
+            'months': months,
+            'categories': categories,
             'data': data_matrix
         }
         
@@ -108,28 +105,6 @@ class YearMatrixView(APIView):
 class YearSummaryView(APIView):
     """
     GET /api/amfi/year/<year>/summary/
-    
-    Returns aggregated data: Small Cap separate + rest as Large/Midcap.
-    
-    Example:
-        GET /api/amfi/year/2025/summary/
-    
-    Response:
-        {
-            "year": 2025,
-            "data": [
-                {
-                    "month": "01-May-25",
-                    "small_cap": 3476.04,
-                    "large_midcap": 21214.29
-                },
-                {
-                    "month": "01-Jun-25",
-                    "small_cap": 4200.00,
-                    "large_midcap": 22000.00
-                }
-            ]
-        }
     """
     
     def get(self, request, year):
@@ -141,8 +116,11 @@ class YearSummaryView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
+        # Convert to 2-digit year suffix
+        year_suffix = get_year_suffix(year)
+        
         # Get all data for the year
-        qs = AmfiMonthlyData.objects.filter(month__contains=str(year))
+        qs = AmfiMonthlyData.objects.filter(month__contains=f'-{year_suffix}')
         
         if not qs.exists():
             return Response(
@@ -150,8 +128,8 @@ class YearSummaryView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
         
-        # Get unique months
-        months = sorted(qs.values_list('month', flat=True).distinct())
+        # Get unique months (convert to set to remove duplicates)
+        months = sorted(list(set(qs.values_list('month', flat=True))))
         
         # Calculate Small Cap + Large/Midcap for each month
         summary_data = []
@@ -196,17 +174,7 @@ class MonthDetailView(APIView):
     Returns all schemes for a specific month.
     
     Example:
-        GET /api/amfi/month/01-Oct-25/
-    
-    Response:
-        {
-            "month": "01-Oct-25",
-            "data": [
-                {"scheme": "SMALL CAP FUND", "net_inflow": 3476.04},
-                {"scheme": "LARGE CAP FUND", "net_inflow": 971.97},
-                ...
-            ]
-        }
+        GET /api/amfi/month/01-Apr-25/
     """
     
     def get(self, request, month):

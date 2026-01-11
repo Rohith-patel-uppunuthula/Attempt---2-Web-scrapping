@@ -13,15 +13,6 @@ logger = logging.getLogger(__name__)
 class DownloadService:
     """
     Core service for downloading Excel files with idempotency checks.
-    Now includes parsing and storing data in database.
-    
-    Workflow:
-    1. Generate URL for current month
-    2. Check if already downloaded (idempotency)
-    3. Download file if needed
-    4. Parse Excel file
-    5. Store parsed data in database
-    6. Log everything
     """
     
     def __init__(self):
@@ -31,37 +22,68 @@ class DownloadService:
     
     def execute_download(self):
         """
-        Main execution method called by API endpoint.
-        
-        Returns:
-            dict: Result summary with status and details
+        Download current month (default behavior).
         """
-        # Step 1: Generate URL for current month
         url_data = self.url_generator.generate_current_month_url()
         url = url_data['url']
         month = url_data['month']
         year = url_data['year']
         
-        # Step 2: Idempotency check
-        if self.logger.check_previous_success(url):
-            # Already downloaded successfully, skip
-            skip_reason = f"Already downloaded successfully on a previous API call"
-            self.logger.log_skip(url, month, year, skip_reason)
-            
+        return self._process_download(url, month, year)
+    
+    def execute_download_for_date(self, month, year):
+        """
+        Download specific month/year.
+        """
+        # Validate month
+        valid_months = ['jan', 'feb', 'mar', 'apr', 'may', 'jun',
+                       'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
+        
+        month = month.lower()
+        if month not in valid_months:
             return {
-                'status': 'skipped',
-                'message': 'File already downloaded successfully',
-                'url': url,
-                'month': month,
-                'year': year,
-                'skip_reason': skip_reason,
-                'parsed_records': 0
+                'status': 'error',
+                'message': f'Invalid month: {month}. Must be one of: {", ".join(valid_months)}',
+                'error': 'Invalid month'
             }
         
-        # Step 3: Attempt download
+        # Generate URL for specific date
+        url = self.url_generator.generate_url_for_date(month, year)
+        
+        return self._process_download(url, month, year)
+    
+    def _process_download(self, url, month, year):
+        """
+        Common logic for processing download + parse + store.
+        """
+        # Step 1: Idempotency check - check both download log AND database
+        if self.logger.check_previous_success(url):
+            # Also check if data actually exists in database
+            month_label = ExcelParser._format_month_label(month, year)
+            data_exists = AmfiMonthlyData.objects.filter(month=month_label).exists()
+            
+            if data_exists:
+                # Already downloaded AND data exists, skip
+                skip_reason = f"Already downloaded successfully on a previous API call"
+                self.logger.log_skip(url, month, year, skip_reason)
+                
+                return {
+                    'status': 'skipped',
+                    'message': 'File already downloaded successfully and data exists in database',
+                    'url': url,
+                    'month': month,
+                    'year': year,
+                    'skip_reason': skip_reason,
+                    'parsed_records': 0
+                }
+            else:
+                # Downloaded but no data in DB - need to re-parse
+                logger.info(f"File downloaded but no data in DB for {month} {year}, re-parsing...")
+        
+        # Step 2: Attempt download (or skip if file exists)
         download_result = self._download_file(url, month, year)
         
-        # Step 4: If download succeeded, parse and store
+        # Step 3: If download succeeded, parse and store
         if download_result['status'] == 'success':
             parse_result = self._parse_and_store(
                 download_result['file_path'],
@@ -76,35 +98,21 @@ class DownloadService:
     def _download_file(self, url, month, year):
         """
         Download file from URL and save to disk.
-        
-        Args:
-            url (str): URL to download
-            month (str): Month (e.g., 'jan')
-            year (int): Year (e.g., 2025)
-        
-        Returns:
-            dict: Download result with status and details
         """
         try:
-            # Make HTTP request with timeout
             response = requests.get(url, timeout=30, stream=True)
             
-            # Check if file exists (HTTP 200)
             if response.status_code == 200:
-                # Generate filename
                 filename = f"am{month}{year}repo.xls"
                 file_path = os.path.join(self.download_dir, filename)
                 
-                # Save file to disk
                 with open(file_path, 'wb') as f:
                     for chunk in response.iter_content(chunk_size=8192):
                         if chunk:
                             f.write(chunk)
                 
-                # Get file size
                 file_size = os.path.getsize(file_path)
                 
-                # Log success
                 self.logger.log_success(
                     url=url,
                     month=month,
@@ -126,17 +134,8 @@ class DownloadService:
                 }
             
             else:
-                # File doesn't exist or error occurred
                 error_msg = f"HTTP {response.status_code}: File not available"
-                
-                # Log failure
-                self.logger.log_failure(
-                    url=url,
-                    month=month,
-                    year=year,
-                    http_status=response.status_code,
-                    error_message=error_msg
-                )
+                self.logger.log_failure(url, month, year, response.status_code, error_msg)
                 
                 return {
                     'status': 'failed',
@@ -190,17 +189,8 @@ class DownloadService:
     def _parse_and_store(self, file_path, month, year):
         """
         Parse downloaded Excel file and store data in database.
-        
-        Args:
-            file_path (str): Path to downloaded Excel file
-            month (str): Month (e.g., 'jan')
-            year (int): Year (e.g., 2025)
-        
-        Returns:
-            dict: Parse result with status and count
         """
         try:
-            # Parse Excel file
             parsed_data = ExcelParser.parse_excel(file_path, month, year)
             
             if not parsed_data:
@@ -211,7 +201,6 @@ class DownloadService:
                     'message': 'No data extracted from Excel file'
                 }
             
-            # Store in database
             records_stored = 0
             for record in parsed_data:
                 AmfiMonthlyData.objects.update_or_create(
